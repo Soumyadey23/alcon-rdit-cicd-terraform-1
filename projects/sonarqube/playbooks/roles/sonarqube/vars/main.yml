@@ -1,0 +1,16 @@
+---
+# vars file for sonarqube
+sonarqube_version: '8.9.9.56886'
+sonarqube_download_url: 'https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-{{ sonarqube_version }}.zip'
+
+sonarqube_base_dir: '/opt'
+sonarqube_work_dir: '{{ sonarqube_base_dir }}/sonarqube-{{ sonarqube_version }}'
+sonarqube_linux_script: '{{ sonarqube_work_dir }}/bin/linux-x86-64/sonar.sh'
+
+sonarqube_user: 'sonaradmin'
+sonarqube_group: 'sonaradmin'
+
+sonarqube_vm_max_map_count: '524288'
+sonarqube_fs_file_max: '131072'
+sonarqube_nofile: '131072'
+sonarqube_nproc: '8192'

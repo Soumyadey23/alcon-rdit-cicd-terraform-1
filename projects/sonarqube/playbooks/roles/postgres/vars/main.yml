@@ -1,0 +1,4 @@
+---
+# vars file for postgres
+postgres_version: '14'
+postgres_binary: 'postgresql{{ postgres_version }}'

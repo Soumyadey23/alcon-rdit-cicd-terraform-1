@@ -1,0 +1,38 @@
+
+
+image: hashicorp/terraform
+
+pipelines:
+  default:
+    - parallel:
+      - step:
+          name: ValidationScan
+          script:
+            - terraform init
+            - terraform validate
+      - step:
+          name: SecurityScan
+          script:
+            - pipe: atlassian/git-secrets-scan:0.5.1
+  branches:
+    development:
+      - step:
+          name: BuildArtifacts
+          script:
+            - ls
+            - mkdir artifact_dir
+            - apk update && apk add zip
+            - zip -r artifact_dir/source.zip . -x '*.git*' bitbucket-pipelines.yml
+          artifacts:
+            - artifact_dir/**
+      - step:
+          name: DeployArtifacts
+          # trigger: manual  # Uncomment to make this a manual deployment.
+          script:
+            - pipe: atlassian/aws-s3-deploy:0.4.5
+              variables:
+                AWS_ACCESS_KEY_ID: $AWS_ACCESS_KEY_ID
+                AWS_SECRET_ACCESS_KEY: $AWS_SECRET_ACCESS_KEY
+                AWS_DEFAULT_REGION: "us-east-1"
+                S3_BUCKET: "rdit-sb-artifacts-bucket/tf-deployment-codebuild"
+                LOCAL_PATH: "artifact_dir"

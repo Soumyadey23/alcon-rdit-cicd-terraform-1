@@ -1,0 +1,11 @@
+---
+# tasks file for postgres
+- name: 'Check if Postgres exists'
+  ansible.builtin.shell: psql --version  | awk '{print $3}' | sed 's/"//g'
+  register: postgress_status
+
+- name: 'Install PSQL using amazon-linux-extras'
+  ansible.builtin.command: 'amazon-linux-extras install -y {{ postgres_binary }}'
+  register: result
+  failed_when: result.rc != 0 
+  when: postgress_status.stdout.find('14.') != 0

@@ -1,0 +1,14 @@
+- name: 'Install and Configure SonarQube on Amazon Linux2 EC2 Instance'
+  hosts: sonar
+  become: yes
+
+  # tasks:
+    # - name: 'Upgrade all yum packages'
+    #   ansible.builtin.yum:
+    #     name: '*'
+    #     state: latest
+
+  roles:
+    - java
+    - postgres
+    - sonarqube

@@ -1,0 +1,140 @@
+@Library('sc_ppl_anyos_jenkins_rss_asc@dev') _
+
+def props = [:]
+
+node ('cloud-rdit-mlops-linux') {
+    props = readProperties (file: "ci/sharedlib/tf/parameter.properties")
+}
+
+def awsRegion
+def awsKey
+def approvers
+def autoApprove
+def tfAction
+def projectPath
+
+pipeline {
+    agent none
+    
+    options {
+        timeout(time: 45, unit: 'MINUTES')
+        //timestamps()
+        skipDefaultCheckout()
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '2', daysToKeepStr: '10', numToKeepStr: '15'))
+    }
+    
+    environment {
+        // DEPLOY_ENV = "${env.BRANCH_NAME == 'master' ? 'prod' : env.BRANCH_NAME}"
+        // DEPLOY_PARAM_ENV = "${env.DEPLOY_ENV == 'prod' ? 'PRODUCTION' : env.BRANCH_NAME}"
+        DEPLOY_ENV = "${env.BRANCH_NAME == 'dev' ? 'dev' : env.BRANCH_NAME}"
+        DEPLOY_PARAM_ENV = "${env.DEPLOY_ENV == 'dev' ? 'DEVELOPMENT' : env.BRANCH_NAME}"
+        AWS_CREDENTIALS = "${props['awsKey']}_${env.DEPLOY_ENV}"
+        AWS_REGION = "${props['awsRegion']}"
+        PROJECT_WS = "${props['projectPath']}"
+        TF_ACTION = "${props['tfAction']}"
+        ACTION = "${ env.TF_ACTION == 'destroy' ? '-destroy' : ' ' }"
+    }
+    
+    stages {
+        stage('Ready for deployment?') {
+            when {
+                not { expression { "${env.BRANCH_NAME}" == "poc" || "${env.BRANCH_NAME}" == "dev"  } }
+            }
+            steps {
+                script {
+                    inputSubmitter(APPROVERS:"${props['approvers']}", DEPLOY_PARAM_ENV:"${env.DEPLOY_PARAM_ENV}")
+                }
+            }
+        }
+        stage('Checkout') {
+            agent { label 'cloud-rdit-mlops-linux' }
+            steps {
+                step([$class: 'WsCleanup'])
+                checkout scm
+            }
+        }
+        stage ("Validate") {
+            agent { label 'cloud-rdit-mlops-linux' }
+            steps {
+                dir( "${env.PROJECT_WS}" ) {
+                    withAwsCli(credentialsId: "${env.AWS_CREDENTIALS}", defaultRegion: "${env.AWS_REGION}") {
+                        sh """
+                            terraform init -input=false -no-color -reconfigure -backend-config=env/${env.DEPLOY_ENV}/backend.tf
+                            terraform validate -no-color
+                        """
+                    }
+                }
+            }
+        }
+        stage('Plan') {
+            agent { label 'cloud-rdit-mlops-linux' }
+            steps {
+                dir( "${env.PROJECT_WS}" ) {
+                    withAwsCli(credentialsId: "${env.AWS_CREDENTIALS}", defaultRegion: "${env.AWS_REGION}") {
+                        sh """
+                            terraform plan ${env.ACTION} -input=false -no-color -out tfplan -var-file=env/${env.DEPLOY_ENV}/terraform.tfvars
+                            terraform show -no-color tfplan > tfplan.txt
+                        """
+                    }
+                }
+            }
+        }
+        stage('Approval') {
+            when {
+                not {
+                    equals expected: true, actual: "${props['autoApprove']}"
+                }
+            }
+            steps {
+                script {
+                    def plan = 'Review recent logs for plan and output details.'
+                    input message: "Do you want to apply the plan?",
+                        parameters: [text(name: 'Terraform Plan', description: 'Please review the plan and approve/abort here', defaultValue: plan)]
+                }
+            }
+        }
+        stage('Apply') {
+            agent { label 'cloud-rdit-mlops-linux' }
+            steps {
+                dir( "${env.PROJECT_WS}" ) {
+                    withAwsCli(credentialsId: "${env.AWS_CREDENTIALS}", defaultRegion: "${env.AWS_REGION}") {
+                        sh """
+                            terraform apply -input=false -no-color tfplan
+                        """
+                    }
+                }
+            }
+        }
+        stage('Ansible Execution') {
+            when {
+                environment name: 'TF_ACTION', value: 'apply'
+                not {
+                    branch 'poc'
+                }
+            }           
+            agent { label 'cloud-rdit-mlops-linux' }
+            steps {
+                dir( "${env.PROJECT_WS}" ) {
+                    withAwsCli(credentialsId: "${env.AWS_CREDENTIALS}", defaultRegion: "${env.AWS_REGION}") {
+                        sshagent(credentials : ['mlopscicd-dev-ssh-key']) {
+                            script {
+                                server_count = sh(script:'terraform output -json instance_pvt_ip | jq length', returnStdout: true)
+                                for (int count = 0; count < "${server_count}".toInteger(); ++count) {
+    								echo "Server number = ${count}"
+    								server_ip = sh(script:"terraform output -json instance_pvt_ip | jq --argjson v ${count} -r '.[\$v]'", returnStdout: true).trim()
+    								echo "Login to Server_${count} = ${server_ip}"
+                                    sh "date > jenkins-hostfile"
+                                    sh "hostname >> jenkins-hostfile"
+                                    sh "cat jenkins-hostfile"
+                                    sh "scp -o StrictHostKeyChecking=no jenkins-hostfile ec2-user@${server_ip}:/home/ec2-user/jenkins-hostfile"
+                                    sh "echo 'File copied to ${server_ip}'"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

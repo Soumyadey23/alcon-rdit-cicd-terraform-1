@@ -1,0 +1,11 @@
+---
+# tasks file for java
+- name: 'Check if Java exists'
+  ansible.builtin.shell: java -version 2>&1 | grep version | awk '{print $3}' | sed 's/"//g'
+  register: java_status
+
+- name: 'Install Java using amazon-linux-extras'
+  ansible.builtin.command: 'amazon-linux-extras install -y {{ java_binary }}'
+  register: result
+  failed_when: result.rc != 0 
+  when: java_status.stdout.find('11.') != 0

@@ -1,0 +1,5 @@
+---
+# vars file for java
+java_version: '11'
+java_binary: 'java-openjdk{{ java_version }}'
+

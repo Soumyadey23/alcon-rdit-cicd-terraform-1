@@ -1,0 +1,81 @@
+---
+# tasks file for sonarqube
+
+# -
+#   name: 'Install Postgress Database using amazon-linux-extras'
+#   command: 'amazon-linux-extras install -y postgresql13'
+#   register: result
+#   failed_when: result.rc != 0
+
+- name: 'Create SonarQube base directory'
+  ansible.builtin.file:
+    path: '{{ sonarqube_base_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: 'Create a SonarQube Group'
+  ansible.builtin.group:
+    name: '{{ sonarqube_user }}'
+    state: present
+  
+- name: 'Create a SonaqQube User'
+  ansible.builtin.user:
+    name: '{{ sonarqube_user }}'
+    group: '{{ sonarqube_group }}'
+    create_home: no
+    state: present
+    
+- name: 'Check if SonarQube binary exists'
+  ansible.builtin.stat:
+    path: '{{ sonarqube_linux_script }}'
+  register: sonar_script_stat
+  
+- name: 'Download and Unzip SonarQube Package'
+  ansible.builtin.unarchive:
+    src: '{{ sonarqube_download_url }}'
+    dest: '{{ sonarqube_base_dir }}'
+    remote_src: yes
+    owner: '{{ sonarqube_user }}'
+    group: '{{ sonarqube_group }}'
+    creates: '{{ sonarqube_work_dir }}'
+  when: not sonar_script_stat.stat.exists
+  
+- name: 'Set values in config file as required by SonarQube'
+  ansible.posix.sysctl:
+    name: '{{ item.name }}'
+    value: '{{ item.value }}'
+    sysctl_file: /etc/sysctl.d/sonarqube.conf
+    reload: yes
+  with_items:
+    - { name: 'vm.max_map_count', value: '{{ sonarqube_vm_max_map_count }}' }
+    - { name: 'fs.file-max', value: '{{ sonarqube_fs_file_max }}' }
+  
+- name: 'Ensure SonarQube as init script for service management'
+  ansible.builtin.file:
+    src: '{{ sonarqube_linux_script }}'
+    dest: /etc/init.d/sonar
+    state: link
+  when: "ansible_service_mgr != 'systemd'"
+  
+- name: 'Configure systemd for sonarqube service'
+  ansible.builtin.template:
+    src: sonarqube.service.j2
+    dest: /etc/systemd/system/sonarqube.service
+    mode: 0644
+  register: systemd_service
+  when: 'ansible_service_mgr == "systemd"'
+  
+- name: 'Ensure SonarQube is running and set to start on boot'
+  ansible.builtin.service:
+    name: sonarqube
+    state: started
+    enabled: yes
+    
+- name: 'Wait for SonarQube to start'
+  ansible.builtin.wait_for:
+    port: 9000
+    delay: 5
+    timeout: 300
+  

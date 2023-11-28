@@ -1,0 +1,172 @@
+@Library('sc_ppl_anyos_jenkins_rss_asc@master') _
+
+pipeline {
+    agent none
+    
+    options {
+        timeout(time: 45, unit: 'MINUTES')
+        //timestamps()
+        skipDefaultCheckout()
+        disableConcurrentBuilds()
+        buildDiscarder(logRotator(artifactDaysToKeepStr: '30', artifactNumToKeepStr: '2', daysToKeepStr: '10', numToKeepStr: '15'))
+    }
+    
+    environment {
+        // DEPLOY_ENV = "${env.BRANCH_NAME == 'master' ? 'prod' : env.BRANCH_NAME}"
+        // DEPLOY_PARAM_ENV = "${env.DEPLOY_ENV == 'prod' ? 'PRODUCTION' : env.BRANCH_NAME}"
+        DEPLOY_ENV = "${env.BRANCH_NAME == 'dev' ? 'dev' : env.BRANCH_NAME}"
+        DEPLOY_PARAM_ENV = "${env.DEPLOY_ENV == 'dev' ? 'DEVELOPMENT' : env.BRANCH_NAME}"
+    }
+    
+    stages {
+        stage('Checkout') {
+            agent { label 'cloud-rdit-mlops-linux' }
+            steps {
+                step([$class: 'WsCleanup'])
+                checkout scm
+                script{
+                    def props = readProperties (file: "projects/sonarqube/ci/parameter.properties")
+                    env.AWS_CREDENTIALS = "${props['awsKey']}_${env.DEPLOY_ENV}"
+                    env.AWS_REGION = "${props['awsRegion']}"
+                    env.PROJECT_WS = "${props['projectPath']}"
+                    env.TF_ACTION = "${props['tfAction']}"
+                    env.ACTION = "${ env.TF_ACTION == 'destroy' ? '-destroy' : ' ' }"
+                    env.IS_APPROVERS = "${props['approvers']}"
+                    env.AUTO_APPROVAL = "${props['autoApprove']}"
+                }
+                
+            }
+        }
+        stage('Ready for deployment?') {
+            when {
+                not { expression { "${env.BRANCH_NAME}" == "poc" || "${env.BRANCH_NAME}" == "dev"  } }
+            }
+            steps {
+                script {
+                    inputSubmitter(APPROVERS:"${IS_APPROVERS}", DEPLOY_PARAM_ENV:"${DEPLOY_PARAM_ENV}")
+                }
+            }
+        }
+        stage ("Validate") {
+            agent { label 'cloud-rdit-mlops-linux' }
+            steps {
+                dir( "${PROJECT_WS}" ) {
+                    withAwsCli(credentialsId: "${AWS_CREDENTIALS}", defaultRegion: "${AWS_REGION}") {
+                        sh """
+                            terraform init -input=false -no-color -reconfigure -backend-config=env/${DEPLOY_ENV}/backend.tf
+                            terraform validate -no-color
+                        """
+                    }
+                }
+            }
+        }
+        stage('Plan') {
+            agent { label 'cloud-rdit-mlops-linux' }
+            steps {
+                dir( "${PROJECT_WS}" ) {
+                    withAwsCli(credentialsId: "${AWS_CREDENTIALS}", defaultRegion: "${AWS_REGION}") {
+                        sh """
+                            terraform plan ${ACTION} -input=false -no-color -out tfplan -var-file=env/${DEPLOY_ENV}/terraform.tfvars
+                            terraform show -no-color tfplan > tfplan.txt
+                        """
+                    }
+                }
+            }
+        }
+        stage('Approval') {
+            when {
+                not {
+                    equals expected: true, actual: "${AUTO_APPROVAL}"
+                }
+            }
+            steps {
+                script {
+                    def plan = 'Review recent logs for plan and output details.'
+                    input message: "Do you want to apply the plan?",
+                        parameters: [text(name: 'Terraform Plan', description: 'Please review the plan and approve/abort here', defaultValue: plan)]
+                }
+            }
+        }
+        stage('Apply') {
+            agent { label 'cloud-rdit-mlops-linux' }
+            steps {
+                dir( "${PROJECT_WS}" ) {
+                    withAwsCli(credentialsId: "${AWS_CREDENTIALS}", defaultRegion: "${AWS_REGION}") {
+                        sh """
+                            terraform apply -input=false -no-color tfplan
+                        """
+                    }
+                }
+            }
+        }
+        stage('Ansible Execution') {
+            when {
+                environment name: 'TF_ACTION', value: 'apply'
+                not {
+                    branch 'poc'
+                }
+            }           
+            agent { label 'cloud-rdit-mlops-linux' }
+            steps {
+                dir( "${PROJECT_WS}" ) {
+                    withAwsCli(credentialsId: "${AWS_CREDENTIALS}", defaultRegion: "${AWS_REGION}") {
+                        sshagent(credentials : ['mlopscicd-dev-ssh-key']) {
+                            script {
+                                server_count = sh(script:'terraform output -json instance_pvt_ip | jq length', returnStdout: true)
+                                for (int count = 0; count < "${server_count}".toInteger(); ++count) {
+    								echo "Server number = ${count}"
+    								server_ip = sh(script:"terraform output -json instance_pvt_ip | jq --argjson v ${count} -r '.[\$v]'", returnStdout: true).trim()
+    								echo "Add sonar${count} = ${server_ip} in ansible inventory"
+                                    sh "sed -i \"/^\\[sonar\\]/a\\sonar${count} ansible_host=${server_ip} ansible_connection=ssh ansible_user=ec2-user\" playbooks/inventory"
+                                }
+                                echo "Executing Ansible Playbook for Sonarqube installation"
+                                sh 'ansible-galaxy collection install -r playbooks/requirements.yml'
+                                sh 'ansible-playbook -i playbooks/inventory playbooks/playbook.yml'
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        // success {
+        //     emailext(
+        //         subject: '[$BUILD_STATUS] $PROJECT_NAME - Build #$BUILD_NUMBER',
+        //         body: 'Job completed successfully!\n\n$PROJECT_NAME - Build #$BUILD_NUMBER: $BUILD_STATUS!\n$BUILD_URL\n\n-- \nJenkins C.I. - (shekar.meduri@alcon.com)',
+        //         mimeType: 'text/plain',
+        //         recipientProviders: [ [$class: 'DevelopersRecipientProvider'], [$class: 'RequesterRecipientProvider'] ]
+        //     )
+        // }
+        // failure {
+        //     emailext(
+        //         subject: '[$BUILD_STATUS] $PROJECT_NAME - Build #$BUILD_NUMBER',
+        //         body: 'Once more unto the breach, dear friends, once more!\n\n$PROJECT_NAME - Build #$BUILD_NUMBER: $BUILD_STATUS!\n$BUILD_URL\n\n-- \nJenkins C.I. - (shekar.meduri@alcon.com)',
+        //         mimeType: 'text/plain',
+        //         recipientProviders: [ [$class: 'DevelopersRecipientProvider'], [$class: 'CulpritsRecipientProvider'], [$class: 'RequesterRecipientProvider'] ]
+        //     )
+        // }
+        // unstable {
+        //     emailext(
+        //         subject: '[$BUILD_STATUS] $PROJECT_NAME - Build #$BUILD_NUMBER',
+        //         body: 'An unstable pilot steers a leaking ship.\n\n$PROJECT_NAME - Build #$BUILD_NUMBER: $BUILD_STATUS!\n$BUILD_URL\n\n-- \nJenkins C.I. - (jshekar.meduri@alcon.com)',
+        //         mimeType: 'text/plain',
+        //         recipientProviders: [ [$class: 'DevelopersRecipientProvider'], [$class: 'CulpritsRecipientProvider'], [$class: 'RequesterRecipientProvider'] ]
+        //     )
+        // }
+        // fixed {
+        //     emailext(
+        //         subject: '[$BUILD_STATUS] $PROJECT_NAME - Build #$BUILD_NUMBER',
+        //         body: 'Looks like we\'re back on track.\n\n$PROJECT_NAME - Build #$BUILD_NUMBER: $BUILD_STATUS!\n$BUILD_URL\n\n-- \nJenkins C.I. - (shekar.meduri@alcon.com)',
+        //         mimeType: 'text/plain',
+        //         recipientProviders: [ [$class: 'DevelopersRecipientProvider'], [$class: 'CulpritsRecipientProvider'], [$class: 'RequesterRecipientProvider'] ]
+        //     )
+        // }
+        always {
+            node('cloud-rdit-rss-linux') {
+                step([$class: 'WsCleanup'])
+            }
+        }
+    }
+}

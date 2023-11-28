@@ -1,0 +1,27 @@
+version: 0.2
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.9
+    commands:
+      - "yum install -y yum-utils"
+      - "yum-config-manager --add-repo https://rpm.releases.hashicorp.com/AmazonLinux/hashicorp.repo"
+      - "yum -y install terraform"
+
+  pre_build:
+    commands:
+      - terraform init -input=false
+      - terraform plan -input=false
+      
+  build:
+    commands:
+      - terraform ${TF_ACTION} -input=false -auto-approve
+
+  post_build:
+    commands:
+      - echo "Terraform completed on `date`"
+
+artifacts:
+  files:
+    - '**/*'
