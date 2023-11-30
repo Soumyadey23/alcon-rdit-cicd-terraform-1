@@ -50,6 +50,8 @@ module "ec2_sg_module" {
   team_name       = var.team_name
   project_name    = var.project_name
   aws_env         = var.aws_env
+  aws_region      = var.aws_region
+  sg_type         = var.sg_type
   primary_vpc_id   = var.primary_vpc_id
   ingress_sg_ports = var.ingress_ec2sg_ports
   ingress_sg_cidr  = var.ingress_sg_cidr
