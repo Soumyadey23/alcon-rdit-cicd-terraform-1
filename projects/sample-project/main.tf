@@ -5,6 +5,7 @@ module "ec2_module" {
   team_name         = var.team_name
   project_name      = var.project_name
   aws_env           = var.aws_env
+  aws_region        = var.aws_region
   # configuration     = var.configuration
   ec2_ami           = var.ec2_ami
   ec2_type          = var.ec2_type
