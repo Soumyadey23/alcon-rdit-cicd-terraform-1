@@ -13,6 +13,9 @@ variable "project_name" {
 variable "aws_env" {
     type = string
 }
+variable "sg_type" {
+    type = string
+}
 
 # variable "configuration" {
 #   description = "The total configuration, List of Objects/Dictionary"
