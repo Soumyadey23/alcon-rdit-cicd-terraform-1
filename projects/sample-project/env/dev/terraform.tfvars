@@ -27,4 +27,4 @@ extra_ebs_type      = "gp2"
 primary_vpc_id      = "vpc-0e6e0e44c1c187780"
 ingress_ec2sg_ports = [80, 22]
 ingress_sg_cidr     = ["10.0.0.0/8", "136.0.0.0/8", "161.0.0.0/8", "192.168.0.0/16"]
-elb_subnet_id       = ["subnet-0310ad0766aec552e", "subnet-07ff8df1803e58bc8"]
+elb_subnet_id       = ["subnet-0518229d26f6ae6b7", "subnet-0ff2eff19aac8f426"]
