@@ -4,6 +4,7 @@ aws_env         = "dev"
 org_name        = "alcon"
 team_name       = "rdit"
 project_name    = "tfpoc"
+sg_type         = "ingress"
 
 # ec2 instance info
 ec2_ami         = "ami-0cff7528ff583bf9a"
